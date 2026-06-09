@@ -1,0 +1,21 @@
+{
+  "version": "16.0.0",
+  "files": [
+    {
+      "path": "pdfmailDeliver.py",
+      "url": "https://raw.githubusercontent.com/funny4875/pdfmailDeliver/main/pdfmailDeliver.py"
+    },
+    {
+      "path": "updater.py",
+      "url": "https://raw.githubusercontent.com/funny4875/pdfmailDeliver/main/updater.py"
+    },
+    {
+      "path": "start.bat",
+      "url": "https://raw.githubusercontent.com/funny4875/pdfmailDeliver/main/start.bat"
+    },
+    {
+      "path": "更新.bat",
+      "url": "https://raw.githubusercontent.com/funny4875/pdfmailDeliver/main/%E6%9B%B4%E6%96%B0.bat"
+    }
+  ]
+}

@@ -21,6 +21,7 @@ CONFIG_FILE = ".user_config"
 LOG_FILE = "寄送資訊.log"
 SMTP_SERVER = "mail.edu.tw"
 SMTP_PORT = 465
+APP_VERSION = "16.0.0"
 
 # ================= 輔助類別與函式 =================
 
@@ -181,7 +182,7 @@ class MailSender:
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("薪資單自動拆分與寄送系統 V16")
+        self.title(f"薪資單自動拆分與寄送系統 V{APP_VERSION}")
         self.geometry("700x650")
         
         self.app_path = ConfigManager.get_app_path()
