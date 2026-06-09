@@ -21,7 +21,8 @@ CONFIG_FILE = ".user_config"
 LOG_FILE = "寄送資訊.log"
 SMTP_SERVER = "mail.edu.tw"
 SMTP_PORT = 465
-APP_VERSION = "16.0.0"
+APP_VERSION = "16.0.1"
+ICON_FILE = "app_icon.ico"
 
 # ================= 輔助類別與函式 =================
 
@@ -187,6 +188,7 @@ class App(tk.Tk):
         
         self.app_path = ConfigManager.get_app_path()
         self.log_file_path = os.path.join(self.app_path, LOG_FILE)
+        self.set_window_icon()
         
         self.config_data = ConfigManager.load()
         self.mailing_list = []
@@ -194,6 +196,14 @@ class App(tk.Tk):
         self.current_list_file = None 
         
         self.setup_ui()
+
+    def set_window_icon(self):
+        icon_path = os.path.join(self.app_path, ICON_FILE)
+        if os.path.exists(icon_path):
+            try:
+                self.iconbitmap(icon_path)
+            except tk.TclError:
+                pass
 
     def setup_ui(self):
         tk.Label(self, text="PDF 批次拆分與寄送助手", font=("微軟正黑體", 16, "bold"), pady=10).pack()

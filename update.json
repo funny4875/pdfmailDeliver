@@ -1,5 +1,5 @@
 {
-  "version": "16.0.0",
+  "version": "16.0.1",
   "files": [
     {
       "path": "pdfmailDeliver.py",
@@ -8,6 +8,14 @@
     {
       "path": "updater.py",
       "url": "https://raw.githubusercontent.com/funny4875/pdfmailDeliver/main/updater.py"
+    },
+    {
+      "path": "app_icon.ico",
+      "url": "https://raw.githubusercontent.com/funny4875/pdfmailDeliver/main/app_icon.ico"
+    },
+    {
+      "path": "app_icon.png",
+      "url": "https://raw.githubusercontent.com/funny4875/pdfmailDeliver/main/app_icon.png"
     },
     {
       "path": "啟動.bat",
