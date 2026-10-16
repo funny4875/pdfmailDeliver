@@ -1,5 +1,5 @@
 {
-  "version": "16.0.2",
+  "version": "16.1.0",
   "files": [
     {
       "path": "pdfmailDeliver.py",
@@ -24,6 +24,18 @@
     {
       "path": "更新.bat",
       "url": "https://raw.githubusercontent.com/funny4875/pdfmailDeliver/main/%E6%9B%B4%E6%96%B0.bat"
+    },
+    {
+      "path": "retry_runner.py",
+      "url": "https://raw.githubusercontent.com/funny4875/pdfmailDeliver/main/retry_runner.py"
+    },
+    {
+      "path": "README.md",
+      "url": "https://raw.githubusercontent.com/funny4875/pdfmailDeliver/main/README.md"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "url": "https://raw.githubusercontent.com/funny4875/pdfmailDeliver/main/CHANGELOG.md"
     }
   ]
 }

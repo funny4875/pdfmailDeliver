@@ -5,6 +5,9 @@ import json
 import base64
 import threading
 import time
+import math
+import queue
+from retry_runner import run_delivery
 import re
 import smtplib
 import sys
@@ -21,7 +24,7 @@ CONFIG_FILE = ".user_config"
 LOG_FILE = "寄送資訊.log"
 SMTP_SERVER = "mail.edu.tw"
 SMTP_PORT = 465
-APP_VERSION = "16.0.2"
+APP_VERSION = "16.1.0"
 ICON_FILE = "app_icon.ico"
 
 # ================= 輔助類別與函式 =================
@@ -40,7 +43,7 @@ class ConfigManager:
         app_path = ConfigManager.get_app_path()
         config_path = os.path.join(app_path, CONFIG_FILE)
         
-        default_data = {"email": "", "password": "", "last_dir": os.getcwd(), "delay": "15"}
+        default_data = {"email": "", "password": "", "last_dir": os.getcwd(), "delay": "15", "retry_hours": "24"}
         
         if os.path.exists(config_path):
             try:
@@ -63,7 +66,7 @@ class ConfigManager:
         return default_data
 
     @staticmethod
-    def save(email, password, last_dir, delay):
+    def save(email, password, last_dir, delay, retry_hours=None):
         app_path = ConfigManager.get_app_path()
         config_path = os.path.join(app_path, CONFIG_FILE)
 
@@ -75,7 +78,8 @@ class ConfigManager:
             "email": email,
             "password": enc_password,
             "last_dir": last_dir,
-            "delay": str(delay)
+            "delay": str(delay),
+            "retry_hours": str(retry_hours if retry_hours is not None else ConfigManager.load().get("retry_hours", "24"))
         }
         
         try:
@@ -163,6 +167,8 @@ class MailSender:
             msg['Subject'] = Header(subject, 'utf-8')
             msg.attach(MIMEText(body, 'plain', 'utf-8'))
 
+            if not filepath or not os.path.isfile(filepath):
+                return False, "找不到原 PDF 附件，已取消這封寄送"
             if filepath and os.path.exists(filepath):
                 filename = os.path.basename(filepath)
                 with open(filepath, 'rb') as f:
@@ -170,10 +176,19 @@ class MailSender:
                 part.add_header('Content-Disposition', 'attachment', filename=filename)
                 msg.attach(part)
 
-            server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT)
-            server.login(sender, password)
-            server.send_message(msg)
-            server.quit()
+            server = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, timeout=30)
+            try:
+                server.login(sender, password)
+                server.send_message(msg)
+            finally:
+                # DATA 已被接受後，QUIT 失敗不可把這封信標成未寄出。
+                try:
+                    server.quit()
+                except Exception:
+                    try:
+                        server.close()
+                    except Exception:
+                        pass
             return True, "成功"
         except Exception as e:
             return False, str(e)
@@ -184,7 +199,13 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"薪資單自動拆分與寄送系統 V{APP_VERSION}")
-        self.geometry("700x650")
+        self.geometry("820x760")
+        self.minsize(820, 700)
+        self.stop_event = threading.Event()
+        self.ui_queue = queue.Queue()
+        self.running = False
+        self.protocol("WM_DELETE_WINDOW", self.close_window)
+        self.ui_timer = self.after(100, self.drain_ui)
         
         self.app_path = ConfigManager.get_app_path()
         self.log_file_path = os.path.join(self.app_path, LOG_FILE)
@@ -230,6 +251,21 @@ class App(tk.Tk):
 
         tk.Label(setting_frame, text="秒 (若1小時寄超過100封將強制改為37秒)", font=("微軟正黑體", 9, "bold"), fg="red").pack(side=tk.LEFT, padx=5)
 
+        retry_frame = tk.LabelFrame(self, text="連線失敗自動重試", padx=12, pady=10)
+        retry_frame.pack(fill=tk.X, padx=20, pady=5)
+        tk.Label(retry_frame, text="持續執行上限：").grid(row=0, column=0)
+        self.hours_save_timer = None
+        self.hours_var = tk.StringVar(value=str(self.config_data.get("retry_hours", "24")))
+        self.entry_hours = tk.Entry(retry_frame, width=7, justify="center", textvariable=self.hours_var)
+        self.hours_var.trace_add("write", self.schedule_hours_save)
+        self.entry_hours.grid(row=0, column=1)
+        tk.Label(retry_frame, text="小時（從開始寄送計算，可填小數）").grid(row=0, column=2, sticky="w")
+        self.btn_stop = tk.Button(retry_frame, text="停止寄送／等待", command=self.stop_sending, state="disabled")
+        self.btn_stop.grid(row=0, column=3, padx=12)
+        tk.Label(retry_frame, text="僅重試 Server not connected：2 → 4 → 8 → 16 → 32 → 64 → 120 分鐘", fg="#245b85").grid(row=1, column=0, columnspan=4, sticky="w", pady=(10, 4))
+        tk.Label(retry_frame, text="任一封成功即重設為 2 分鐘；沿用原 PDF、標題與內文，不重新切割。", fg="#555555").grid(row=2, column=0, columnspan=4, sticky="w")
+        tk.Label(retry_frame, text="全部成功或沒有符合的失敗項目時提早結束。停止後保留未完成清單。", fg="#555555").grid(row=3, column=0, columnspan=4, sticky="w")
+
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(self, variable=self.progress_var, maximum=100)
         self.progress_bar.pack(fill=tk.X, padx=20, pady=10)
@@ -241,7 +277,57 @@ class App(tk.Tk):
         self.log_text = scrolledtext.ScrolledText(self, height=15, state='disabled', font=("Consolas", 10))
         self.log_text.pack(fill=tk.BOTH, expand=True, padx=20, pady=5)
 
+    def schedule_hours_save(self, *args):
+        if self.hours_save_timer is not None:
+            self.after_cancel(self.hours_save_timer)
+        self.hours_save_timer = self.after(500, self.save_hours_preference)
+
+    def save_hours_preference(self):
+        if self.hours_save_timer is not None:
+            self.after_cancel(self.hours_save_timer)
+            self.hours_save_timer = None
+        try:
+            hours = float(self.hours_var.get())
+            if not math.isfinite(hours) or hours <= 0:
+                return
+        except ValueError:
+            return
+        value = f"{hours:g}"
+        if value == str(self.config_data.get("retry_hours", "24")):
+            return
+        try:
+            data = ConfigManager.load()
+            ConfigManager.save(data['email'], data['password'], data['last_dir'], data['delay'], value)
+            self.config_data['retry_hours'] = value
+        except OSError as exc:
+            self.log_msg(f"無法儲存執行時數：{exc}")
+
+    def drain_ui(self):
+        try:
+            while True:
+                callback = self.ui_queue.get_nowait()
+                callback()
+        except queue.Empty:
+            pass
+        self.ui_timer = self.after(100, self.drain_ui)
+
+    def close_window(self):
+        self.save_hours_preference()
+        if self.running:
+            self.stop_sending()
+            self.log_msg("停止中，請等目前這封寄送結束後再關閉視窗。")
+        else:
+            self.after_cancel(self.ui_timer)
+            self.destroy()
+
+    def stop_sending(self):
+        self.stop_event.set()
+        self.lbl_status.config(text="正在停止；目前 SMTP 操作結束後停止寄送")
+
     def log_msg(self, msg):
+        if threading.current_thread() is not threading.main_thread():
+            self.ui_queue.put(lambda: self.log_msg(msg))
+            return
         self.log_text.config(state='normal')
         self.log_text.insert(tk.END, msg + "\n")
         self.log_text.see(tk.END)
@@ -302,7 +388,7 @@ class App(tk.Tk):
             # 過濾掉已寄送的行
             new_lines = []
             for line in lines:
-                if sent_file_rel_path not in line:
+                if line.split("\t", 1)[0].strip() != sent_file_rel_path:
                     new_lines.append(line)
 
             if not new_lines: # 如果列表是空的
@@ -605,137 +691,74 @@ class App(tk.Tk):
         tk.Button(dialog, text="確定寄送", command=confirm, bg="#a5d6a7", width=15).pack(pady=20)
 
     def start_sending_thread(self, email, password, user_set_delay):
-        self.btn_select.config(state="disabled")
-        self.btn_import.config(state="disabled")
-        self.entry_delay.config(state="disabled")
-        
-        t = threading.Thread(target=self.sending_process, args=(email, password, user_set_delay), daemon=True)
-        t.start()
+        try:
+            hours = float(self.entry_hours.get())
+            if not math.isfinite(hours) or hours <= 0:
+                raise ValueError()
+        except ValueError:
+            messagebox.showerror("時數錯誤", "持續執行時數必須是大於 0 的數字。")
+            return
+        self.save_hours_preference()
+        self.running = True
+        self.stop_event.clear()
+        for widget in (self.btn_select, self.btn_import, self.entry_delay, self.entry_hours):
+            widget.config(state="disabled")
+        self.btn_stop.config(state="normal")
+        threading.Thread(target=self.sending_process, args=(email, password, user_set_delay, hours), daemon=True).start()
 
-    def sending_process(self, sender_email, sender_password, user_set_delay):
-        """
-        【修改點】
-        主旨使用 source_file (原始檔名)
-        """
-        total = len(self.mailing_list)
-        success_count = 0
-        failed_items = []
-        
-        timestamp = datetime.now().strftime("%Y_%m%d_%H%M")
-        
-        with open(self.log_file_path, "a", encoding="utf-8") as f:
-            f.write(f"\n=== 寄送作業開始 {timestamp} (設定間隔: {user_set_delay}秒) ===\n")
-            f.write(f"{'時間':<20} {'收件人(含Email)':<40} {'狀態'}\n")
-            f.write("-" * 70 + "\n")
+    def sending_process(self, sender_email, sender_password, user_set_delay, hours):
+        timestamp = datetime.now().strftime("%Y_%m%d_%H%M%S")
+        report = os.path.join(self.app_path, f"失敗清單_{timestamp}.txt")
+        jobs = []
+        for item in self.mailing_list:
+            job = dict(item)
+            name = job['name']
+            source = job.get('source_file', '')
+            job['subject'] = f"[出納組通知] {name}" + (f" {source}" if source else "")
+            job['body'] = f"{name} 您好：\n\n這是您的 薪資/加班費通知單，請參閱附檔。\n\n(此為系統自動發送，請勿直接回信)"
+            jobs.append(job)
 
-        self.log_msg(f"--- 開始自動寄送 ---")
+        def status(message):
+            self.ui_queue.put(lambda: self.lbl_status.config(text=message))
 
-        for idx, item in enumerate(self.mailing_list):
-            name = item['name']
-            email = item['email']
-            file_path = item['file_path']
-            date_str = item['date']
-            rel_path = item.get('rel_path', "") 
-            source_file = item.get('source_file', "") # 讀取原始檔名
-            
-            hourly_count = self.get_hourly_sent_count()
-            effective_delay = user_set_delay
-            is_throttled = False
-            
-            if hourly_count >= 100:
-                is_throttled = True
-                if effective_delay < 37:
-                    effective_delay = 37
+        def persist(states):
+            remaining = [(job, reason) for job, reason in states if reason != '成功']
+            temporary = report + '.tmp'
+            with open(temporary, 'w', encoding='utf-8') as f:
+                for job, reason in remaining:
+                    f.write(f"{job['name']} | {job.get('email') or '無Email'} | {reason} | 檔案: {job['file_path']}\n")
+            os.replace(temporary, report)
 
-            progress = ((idx + 1) / total) * 100
-            self.progress_var.set(progress)
-            
-            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            recipient_info = f"{name} <{email if email else '無Email'}>"
-            log_line = ""
-            is_success = False
-            fail_reason = ""
+        def result(job, ok, reason):
+            now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            message = f"{now} {job['name']} <{job.get('email')}> {'成功' if ok else '失敗: ' + reason}"
+            self.log_msg(message)
+            with open(self.log_file_path, 'a', encoding='utf-8') as f:
+                f.write(message + '\n')
+            if ok and job.get('rel_path'):
+                self.update_mailing_list_file(job['rel_path'])
 
-            if email:
-                if is_throttled:
-                    status_msg = f"流量警告: 1小時內已寄 {hourly_count} 封。強制降速至 {effective_delay} 秒。"
-                else:
-                    status_msg = f"正在寄送：{name} ... ({idx+1}/{total})"
-                
-                self.lbl_status.config(text=status_msg, fg="red" if is_throttled else "blue")
-                if is_throttled and hourly_count % 5 == 0:
-                    self.log_msg(f"[系統保護] 流量過高 ({hourly_count}/hr)，已啟動延遲保護 ({effective_delay}s)")
-                elif not is_throttled:
-                    self.log_msg(status_msg)
+        try:
+            self.log_msg(f"開始寄送，最多執行 {hours:g} 小時。")
+            states = run_delivery(
+                jobs, lambda job: MailSender.send(sender_email, sender_password, job['email'], job['subject'], job['body'], job['file_path']),
+                hours * 3600, self.stop_event, status, result, persist,
+                lambda: max(user_set_delay, 37 if self.get_hourly_sent_count() >= 100 else 0))
+            success = sum(reason == '成功' for _, reason in states)
+            self.ui_queue.put(lambda: self.progress_var.set(success / len(jobs) * 100 if jobs else 100))
+            self.log_msg(f"作業結束：成功 {success}/{len(jobs)}；未完成 {len(jobs)-success}。清單：{report}")
+            status("作業結束：已停止" if self.stop_event.is_set() else "作業結束（全部完成、無可重試項目或已達時限）")
+        except Exception as exc:
+            self.log_msg(f"作業中斷：{exc}；請查看預計寄件清單與失敗清單。")
+            status("作業中斷，請查看執行記錄")
+        finally:
+            self.ui_queue.put(self.reset_controls)
 
-                # ================= 這裡已修改 =================
-                # 在主旨後方加上「拆分前」的原始 PDF 檔名
-                if source_file:
-                    subject = f"[出納組通知] {name} {source_file}"
-                else:
-                    # 如果清單是舊格式抓不到原始檔名，就只放姓名，避免混淆
-                    subject = f"[出納組通知] {name}"
-                # =============================================
-
-                body = f"{name} 您好：\n\n這是您的 薪資/加班費通知單，請參閱附檔。\n\n(此為系統自動發送，請勿直接回信)"
-                
-                success, msg = MailSender.send(sender_email, sender_password, email, subject, body, file_path)
-                
-                if success:
-                    success_count += 1
-                    is_success = True
-                    self.log_msg(f"  -> 成功")
-                    log_line = f"{current_time:<20} {recipient_info:<40} 成功"
-                    
-                    if rel_path:
-                        self.update_mailing_list_file(rel_path)
-
-                    if idx < total - 1:
-                        if effective_delay > 0:
-                            for s in range(effective_delay, 0, -1):
-                                if is_throttled:
-                                    self.lbl_status.config(text=f"[保護模式] 冷卻中... {s} 秒 ({idx+1}/{total})")
-                                else:
-                                    self.lbl_status.config(text=f"系統冷卻中... {s} 秒 ({idx+1}/{total})")
-                                time.sleep(1)
-                        else:
-                            time.sleep(0.1)
-                else:
-                    fail_reason = msg
-                    self.log_msg(f"  -> 失敗: {msg}")
-                    log_line = f"{current_time:<20} {recipient_info:<40} 失敗: {msg}"
-            else:
-                fail_reason = "清單中未填寫 Email"
-                self.log_msg(f"  -> 跳過 (無 Email) - {name}")
-                log_line = f"{current_time:<20} {recipient_info:<40} 跳過"
-
-            with open(self.log_file_path, "a", encoding="utf-8") as f:
-                f.write(log_line + "\n")
-
-            if not is_success:
-                failed_items.append(f"{name} | {email if email else '無Email'} | {fail_reason} | 檔案: {os.path.basename(file_path)}")
-
-        if failed_items:
-            fail_report_name = f"失敗清單_{timestamp}.txt"
-            fail_report_path = os.path.join(self.app_path, fail_report_name)
-
-            with open(fail_report_path, "w", encoding="utf-8") as f:
-                for item in failed_items:
-                    f.write(item + "\n")
-            
-            self.log_msg(f"已產出失敗清單: {fail_report_name}")
-
-        self.btn_select.config(state="normal")
-        self.btn_import.config(state="normal")
-        self.entry_delay.config(state="normal")
-        self.lbl_status.config(text="作業結束", fg="blue")
-        
-        final_msg = f"寄送完成！\n成功: {success_count} / 總數: {total}\n\n"
-        if failed_items:
-            final_msg += f"有 {len(failed_items)} 筆失敗，請查看失敗清單。\n\n"
-        final_msg += "是否結束程式？"
-        
-        self.after(0, lambda: self.finish_dialog(final_msg))
+    def reset_controls(self):
+        self.running = False
+        for widget in (self.btn_select, self.btn_import, self.entry_delay, self.entry_hours):
+            widget.config(state="normal")
+        self.btn_stop.config(state="disabled")
 
     def finish_dialog(self, msg):
         if messagebox.askyesno("寄送完成", msg):

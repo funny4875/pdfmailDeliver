@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.user_config
+_update_backup/
+*.log
+拆分_*/
+預計寄件清單_*.txt
+失敗清單_*.txt
+失敗清單_*.txt.tmp
+pdfmailDeliver.original.py
