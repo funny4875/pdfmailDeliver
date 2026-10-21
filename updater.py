@@ -116,7 +116,7 @@ def backup_file(app_path, relative_path):
 
 
 def apply_update(app_path, manifest):
-    with tempfile.TemporaryDirectory(prefix="pdfmail_update_") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="pdfmail_update_", dir=app_path) as temp_dir:
         downloaded = []
 
         for item in manifest["files"]:

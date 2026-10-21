@@ -24,7 +24,7 @@ CONFIG_FILE = ".user_config"
 LOG_FILE = "寄送資訊.log"
 SMTP_SERVER = "mail.edu.tw"
 SMTP_PORT = 465
-APP_VERSION = "16.1.0"
+APP_VERSION = "16.1.1"
 ICON_FILE = "app_icon.ico"
 
 # ================= 輔助類別與函式 =================

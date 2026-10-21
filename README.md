@@ -1,6 +1,6 @@
 # PDF Mail Deliver
 
-目前版本：**16.1.0**
+目前版本：**16.1.1**
 
 Windows 桌面工具，用來批次拆分薪資、鐘點費或加班費通知單 PDF，擷取姓名與 Email，產生寄件清單，透過教育雲信箱寄送個別附件。
 
@@ -24,7 +24,7 @@ python pdfmailDeliver.py
 
 也可以執行 `啟動.bat`，先檢查 GitHub 更新再啟動程式；`更新.bat` 只執行更新。
 批次檔使用 PATH 上的 `python`，請確認套件安裝在同一個 Python 環境。
-更新依 `update.json` 下載檔案，原有程式備份在 `_update_backup/`；本機帳號與時數設定不在更新清單內。
+更新依 `update.json` 下載檔案，原有程式備份在 `_update_backup/`；更新暫存檔建立在程式所在磁碟機，支援安裝於 D: 等磁碟機。本機帳號與時數設定不在更新清單內。
 
 ## 操作方式
 
@@ -83,9 +83,9 @@ python pdfmailDeliver.py
 ## 測試
 
 ```powershell
-python -m unittest test_retry -v
+python -m unittest test_retry test_updater -v
 ```
 
-測試採模擬 SMTP 與虛擬時間，不寄送真實郵件；包含倍增與上限、成功重設、錯誤篩選、時限、停止、附件與信件內容沿用、QUIT 錯誤處理，以及 Tk 介面與時數設定保存。介面測試需要桌面環境。
+測試採模擬 SMTP 與虛擬時間，不寄送真實郵件；包含倍增與上限、成功重設、錯誤篩選、時限、停止、附件與信件內容沿用、QUIT 錯誤處理、更新暫存檔位置，以及 Tk 介面與時數設定保存。介面測試需要桌面環境。
 
 詳細更新內容見 [CHANGELOG.md](CHANGELOG.md)。
